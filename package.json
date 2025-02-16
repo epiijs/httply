@@ -10,7 +10,7 @@
   "exports": "./build/index.js",
   "scripts": {
     "clean": "rm -rf build && rm -rf coverage && rm -rf .nyc_output",
-    "build": "npm run clean && eslint --ext .ts && tsc",
+    "build": "npm run clean && eslint . && tsc",
     "test": "npm run build && nyc --reporter=lcov mocha test/index.js --exit",
     "lcov": "nyc report --reporter=text-lcov | coveralls"
   },
@@ -32,7 +32,9 @@
   "devDependencies": {
     "@epiijs/eslint-config": "^1.0.1",
     "@types/node": "^20.11.16",
-    "eslint": "^9.20.1"
+    "eslint": "^9.20.1",
+    "mocha": "^11.1.0",
+    "nyc": "^17.1.0"
   },
   "dependencies": {
     "bl": "^6.0.10"
