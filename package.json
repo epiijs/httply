@@ -1,0 +1,40 @@
+{
+  "name": "@epiijs/httply",
+  "version": "0.1.0",
+  "description": "A toolkit for handling HTTP requests and responses.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "build/index.js",
+  "exports": "./build/index.js",
+  "scripts": {
+    "clean": "rm -rf build && rm -rf coverage && rm -rf .nyc_output",
+    "build": "npm run clean && eslint --ext .ts && tsc",
+    "test": "npm run build && nyc --reporter=lcov mocha test/index.js --exit",
+    "lcov": "nyc report --reporter=text-lcov | coveralls"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/epiijs/httply.git"
+  },
+  "keywords": [
+    "epiijs",
+    "http",
+    "cruorin"
+  ],
+  "author": "Sartrey Lee <sartrey@163.com> (https://sartrey.cn)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/epiijs/httply/issues"
+  },
+  "homepage": "https://github.com/epiijs/httply#readme",
+  "devDependencies": {
+    "@epiijs/eslint-config": "^1.0.1",
+    "@types/node": "^20.11.16",
+    "eslint": "^9.20.1"
+  },
+  "dependencies": {
+    "bl": "^6.0.10"
+  }
+}
