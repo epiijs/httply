@@ -1,10 +1,17 @@
-import http, { IncomingHttpHeaders, OutgoingHttpHeaders } from 'http';
-import stream, { Readable } from 'stream';
+import http, {
+  IncomingHttpHeaders, OutgoingHttpHeaders
+} from 'http';
+import {
+  pipeline, Readable
+} from 'stream';
 
-import { BufferList } from 'bl';
-
-type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
-type ParamsValue = string | undefined;
+import type {
+  AnyForOutgoingMessage,
+  HTTPMethod,
+  IIncomingMessage,
+  IOutgoingMessage,
+  OutgoingMessageContent
+} from './types.js';
 
 function isReadableStream(o: unknown): o is Readable {
   return o instanceof Readable;
@@ -12,133 +19,128 @@ function isReadableStream(o: unknown): o is Readable {
 
 function readRawBody(request: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const bufferList = new BufferList();
+    const chunks: Buffer[] = [];
     request.on('error', reject);
+    request.on('aborted', () => reject(new Error('request aborted')));
     request.on('data', (chunk: Buffer) => {
-      bufferList.append(chunk);
+      chunks.push(chunk);
     });
     request.on('end', () => {
-      const buffer = bufferList.slice(0);
-      resolve(buffer);
+      resolve(Buffer.concat(chunks));
     });
   });
 }
 
-interface IIncomingMessage {
-  url: string;
-  params: Record<string, ParamsValue>;
-  method: HTTPMethod;
-  headers: IncomingHttpHeaders;
-  query?: Record<string, string | undefined>;
-  body?: Promise<Buffer>;
-}
+export class IncomingMessage implements IIncomingMessage {
+  readonly url: string;
+  readonly method: HTTPMethod;
+  readonly headers: IncomingHttpHeaders;
 
-type IncomingMessage = IIncomingMessage;
+  private _raw: http.IncomingMessage;
+  private _cachedQuery?: Record<string, string | string[]>;
+  private _cachedBody?: Promise<Buffer>;
 
-export function buildIncomingMessage(message: http.IncomingMessage, params?: Record<string, ParamsValue>): IIncomingMessage {
-  const incomingMessage: IIncomingMessage = {
-    url: message.url || '/',
-    params: params || {},
-    method: (message.method || 'GET').toUpperCase() as HTTPMethod,
-    headers: message.headers
-  };
-
-  // TODO: check memory leak
-
-  if (
-    isReadableStream(message) &&
-    ['POST', 'PUT'].includes(incomingMessage.method)
-  ) {
-    let bodyCache: Promise<Buffer> | undefined = undefined;
-    Object.defineProperty(incomingMessage, 'body', {
-      enumerable: true,
-      get: () => {
-        if (!bodyCache) { bodyCache = readRawBody(message); }
-        return bodyCache;
-      }
-    });
+  constructor(raw: http.IncomingMessage) {
+    this._raw = raw;
+    this.url = raw.url || '/';
+    this.method = (raw.method || 'GET').toUpperCase() as HTTPMethod;
+    this.headers = raw.headers;
   }
 
-  // TODO: parse query in getter
-  // get query(): { [key in string]: string | undefined; } {
-  //   const url = new URL(this.url, 'http://localhost');
-  //   return querystring.parse(url.search.slice(1));
-  // }
+  get query(): Record<string, string | string[]> {
+    if (!this._cachedQuery) {
+      const params = new URL(this.url, 'http://localhost').searchParams;
+      this._cachedQuery = {};
+      for (const key of params.keys()) {
+        const values = params.getAll(key);
+        this._cachedQuery[key] = values.length > 1 ? values : values[0];
+      }
+    }
+    return this._cachedQuery;
+  }
 
-  return incomingMessage;
+  get body(): Promise<Buffer> {
+    if (!this._cachedBody) {
+      this._cachedBody = readRawBody(this._raw);
+    }
+    return this._cachedBody;
+  }
 }
 
-type OutgoingMessageContent = string | Buffer | stream.Readable | null | undefined;
+export class OutgoingMessage implements IOutgoingMessage {
+  readonly status: number;
+  readonly headers: OutgoingHttpHeaders;
+  readonly content: OutgoingMessageContent;
 
-interface IOutgoingMessage {
-  status: number;
-  headers: OutgoingHttpHeaders;
-  content: OutgoingMessageContent;
-}
+  constructor(init?: { status?: number; headers?: OutgoingHttpHeaders; content?: OutgoingMessageContent; }) {
+    this.status = init?.status ?? 200;
+    this.headers = init?.headers ?? {};
+    this.content = init?.content ?? '';
+  }
 
-type OutgoingMessage = IOutgoingMessage;
-
-type AnyForOutgoingMessage = Partial<IOutgoingMessage> | OutgoingMessageContent | void;
-
-export function buildOutgoingMessage(message: AnyForOutgoingMessage): IOutgoingMessage {
-  let outgoingMessage: IOutgoingMessage;
-  if (!message) {
-    outgoingMessage = { status: 204, headers: {}, content: '' };
-  } else if (typeof message === 'string') {
-    outgoingMessage = {
-      status: 200,
-      headers: {
-        'content-type': 'text/plain; charset=utf-8',
-        'content-length': message.length.toString()
-      },
-      content: message
-    };
-  } else if (Buffer.isBuffer(message) || isReadableStream(message)) {
-    outgoingMessage = {
-      status: 200,
-      headers: {
-        'content-type': 'application/octet-stream'
-      },
-      content: message
-    };
-  } else {
-    const maybeOutgoingMessage = message;
-    const maybeContentIsString = typeof maybeOutgoingMessage.content === 'string' || maybeOutgoingMessage.content == null;
-    outgoingMessage = {
-      status: maybeOutgoingMessage.status || 200,
-      headers: maybeOutgoingMessage.headers || {
+  static from(message: AnyForOutgoingMessage): OutgoingMessage {
+    if (!message) {
+      return new OutgoingMessage({ status: 204, content: '' });
+    }
+    if (typeof message === 'string') {
+      return new OutgoingMessage({
+        status: 200,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+          'content-length': Buffer.byteLength(message, 'utf-8').toString()
+        },
+        content: message
+      });
+    }
+    if (Buffer.isBuffer(message)) {
+      return new OutgoingMessage({
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': message.length.toString()
+        },
+        content: message
+      });
+    }
+    if (isReadableStream(message)) {
+      return new OutgoingMessage({
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream'
+        },
+        content: message
+      });
+    }
+    const maybeContent = message.content;
+    const maybeContentIsString = typeof maybeContent === 'string' || maybeContent == null;
+    return new OutgoingMessage({
+      status: message.status ?? 200,
+      headers: message.headers ?? {
         'content-type': maybeContentIsString ? 'text/plain; charset=utf-8' : 'application/octet-stream'
       },
-      content: maybeOutgoingMessage.content || ''
-    };
+      content: maybeContent ?? ''
+    });
   }
-  return outgoingMessage;
-}
 
-export async function applyOutgoingMessage(message: IOutgoingMessage, response: http.ServerResponse): Promise<void> {
-  return new Promise((resolve, reject) => {
-    response.on('error', reject);
-    response.on('finish', resolve);
-    response.writeHead(message.status, message.headers);
-    if (message.content) {
-      if (isReadableStream(message.content)) {
-        message.content.pipe(response);
+  async applyToResponse(response: http.ServerResponse): Promise<void> {
+    return new Promise((resolve, reject) => {
+      response.on('error', reject);
+      response.on('finish', resolve);
+      response.writeHead(this.status, this.headers);
+      if (this.content) {
+        if (isReadableStream(this.content)) {
+          pipeline(this.content, response, (error: Error | null) => {
+            if (error) {
+              reject(error);
+            }
+          });
+        } else {
+          response.write(this.content);
+          response.end();
+        }
       } else {
-        response.write(message.content);
         response.end();
       }
-    } else {
-      response.end();
-    }
-  });
+    });
+  }
 }
-
-export type {
-  HTTPMethod,
-  IIncomingMessage,
-  IOutgoingMessage,
-  IncomingMessage,
-  OutgoingMessage,
-  AnyForOutgoingMessage
-};
- 

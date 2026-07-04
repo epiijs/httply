@@ -1,6 +1,6 @@
 {
   "name": "@epiijs/httply",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A toolkit for handling HTTP requests and responses.",
   "engines": {
     "node": ">=20.0.0"
@@ -8,11 +8,12 @@
   "type": "module",
   "main": "build/index.js",
   "exports": "./build/index.js",
+  "files": ["build"],
   "scripts": {
-    "clean": "rm -rf build && rm -rf coverage && rm -rf .nyc_output",
+    "clean": "rm -rf build && rm -rf coverage",
     "build": "npm run clean && eslint . && tsc",
-    "test": "npm run build && nyc --reporter=lcov mocha test/index.js --exit",
-    "lcov": "nyc report --reporter=text-lcov | coveralls"
+    "test": "npm run build && vitest run",
+    "test:coverage": "npm run build && vitest run --coverage"
   },
   "repository": {
     "type": "git",
@@ -20,8 +21,7 @@
   },
   "keywords": [
     "epiijs",
-    "http",
-    "cruorin"
+    "http"
   ],
   "author": "Sartrey Lee <sartrey@163.com> (https://sartrey.cn)",
   "license": "MIT",
@@ -30,13 +30,11 @@
   },
   "homepage": "https://github.com/epiijs/httply#readme",
   "devDependencies": {
-    "@epiijs/eslint-config": "^1.0.1",
-    "@types/node": "^20.11.16",
-    "eslint": "^9.20.1",
-    "mocha": "^11.1.0",
-    "nyc": "^17.1.0"
+    "@epiijs/eslint-config": "^1.1.2",
+    "@types/node": "^20.17.32",
+    "@vitest/coverage-v8": "^3.2.6",
+    "eslint": "^9.25.1",
+    "vitest": "^3.2.6"
   },
-  "dependencies": {
-    "bl": "^6.0.10"
-  }
+  "dependencies": {}
 }
