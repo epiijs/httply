@@ -4,8 +4,11 @@ export default [
   {
     ignores: [
       'eslint.config.mjs',
+      'vitest.config.ts',
+      'spec/',
       'test/',
       'build/',
+      'coverage/',
       'node_modules/'
     ]
   },

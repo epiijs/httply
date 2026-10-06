@@ -1,57 +1,91 @@
 # @epiijs/httply
 
-A toolkit for handling HTTP requests and responses.
+[English](https://github.com/epiijs/httply/blob/main/README.en.md)
 
-## Install
+处理 HTTP 请求与响应的工具包。
+
+它把 Node 的一对收发对象整理成结构化消息，交给消费它的 handler。
+
+## 安装
 
 ```bash
-npm i @epiijs/httply --save
+npm i --save @epiijs/httply
 ```
 
-## Usage
+## 用法
 
 ```js
-import http from 'http';
+import http from 'node:http';
 import { IncomingMessage, OutgoingMessage } from '@epiijs/httply';
 
 http.createServer(async (request, response) => {
-  // build a structured incoming message from raw request
+  // 由原始请求构造结构化入站消息
   const incoming = new IncomingMessage(request);
 
-  // read body (lazy, cached, available for any method)
+  // 读取请求体（惰性、缓存、任意 method 都可读）
+  // 要在发出响应之前读：响应 finish 之后，Node 会丢弃残余的请求体
   const body = await incoming.body;
 
-  // build a structured outgoing message from various types
+  // 由多种内容类型构造结构化出站消息
   const outgoing = OutgoingMessage.from('Hello, world!');
-  // or: OutgoingMessage.from(Buffer.from('...'))
-  // or: new OutgoingMessage({ status: 201, headers: {...}, content: '...' })
+  // 或：OutgoingMessage.from(Buffer.from('...'))
+  // 或：new OutgoingMessage({ status: 201, headers: {...}, content: '...' })
 
-  // send outgoing message to response
-  await outgoing.applyToResponse(response);
+  // 写出响应
+  const { completed } = await outgoing.applyToResponse(response);
+  // completed 为 false 表示响应没有完整交入内核（通常是客户端提前断开），这不是错误
 }).listen(8080);
 ```
 
 ### IncomingMessage
 
-`new IncomingMessage(req)` wraps a Node.js `IncomingMessage` into:
+`new IncomingMessage(req)` 把 Node 的 `IncomingMessage` 包装成：
 
-| Field     | Type                        | Description              |
+| 字段 | 类型 | 说明 |
 |-----------|-----------------------------|--------------------------|
-| url       | string                      | request URL              |
-| method    | HTTPMethod                  | GET, POST, PUT, etc.     |
-| headers   | IncomingHttpHeaders         | request headers          |
-| query     | Record\<string, string \| string[]\> | lazily parsed query params |
-| body      | Promise\<Buffer\>           | lazy body reader (cached) |
+| url       | string                      | 请求 URL |
+| method    | HttpMethod                  | GET、POST、PUT 等 |
+| headers   | IncomingHttpHeaders         | 原始请求头 |
+| query     | Record\<string, string \| string[]\> | 惰性解析的查询参数 |
+| body      | Promise\<Buffer\>           | 惰性读取的请求体（缓存） |
+
+`incoming.body` 读不到完整数据就 reject，不返回半份或空数据。reject 的错误的 `code` 有这些情况：
+
+- `HTTPLY_BODY_ABORTED`：请求流被截断。客户端发到一半断开、请求帧解析失败，或服务端调用了 `req.destroy()`。
+- `HTTPLY_BODY_DROPPED`：首次读取发生在响应 `finish` 之后，此时 Node 已丢弃残余请求体。
+
+`HTTPLY_BODY_DROPPED` 在读取当场给出，`HTTPLY_BODY_ABORTED` 在流终止时给出。
+
+```js
+try {
+  const body = await incoming.body;
+} catch (error) {
+  if (error.code === 'HTTPLY_BODY_DROPPED') {
+    // 顺序错了：要在写出响应之前读 body
+  }
+}
+```
+
+`IncomingMessage.body` 是全量 `Promise<Buffer>`，没有提供流式读取。
+所以 httply 适合收到请求体后立刻消费，不适合代理转发：转发需要 await 请求体后再转发，性能有瓶颈。
+
+httply 不提供读取请求体的超时控制，如果需要超时控制，可以自己实现或使用 Node API 。
 
 ### OutgoingMessage
 
-`OutgoingMessage.from(message)` accepts any of:
+`OutgoingMessage.from(message)` 接受以下任一种输入：
 
-- `string` — responds with `text/plain`
-- `Buffer` / `Readable` — responds with `application/octet-stream`
-- `{ status?, headers?, content? }` — explicit control
-- `null` / `undefined` — responds with 204 No Content
+- `string`：按 `text/plain` 响应
+- `Buffer` / `Readable`：按 `application/octet-stream` 响应
+- `{ status?, headers?, content? }`：逐项指定
+- `null` / `undefined`：按 204 No Content 响应
 
-`new OutgoingMessage({ status?, headers?, content? })` for structured construction.
+结构化构造用 `new OutgoingMessage({ status?, headers?, content? })`。
 
-`message.applyToResponse(response)` writes the message to a `ServerResponse`.
+`message.applyToResponse(response)` 把消息写入 `ServerResponse`，本次写入流程终止时 resolve `{ completed: boolean }`：
+
+- `completed: true`：响应已交入内核（`finish` 已触发），不代表客户端已收到。
+- `completed: false`：写入在 `finish` 之前终止，通常是连接已经断了。这不是错误，Promise 照样 resolve。
+- 只有内容流自身出错才 reject。
+
+`finish` 之后，请求体未读完的连接会由 httply 回收，不读 body 的分支不需要自己 `Connection: close`。
