@@ -2,10 +2,10 @@
 
 [中文](README.md)
 
-A toolkit for handling HTTP requests and responses.
+A toolkit for handling server-side HTTP requests and responses.
 
-It structures a Node.js request/response pair into typed messages for the handler
-that consumes them.
+It shapes a Node request/response pair into structured messages, providing a
+simpler and easier-to-use API.
 
 ## Install
 
@@ -23,25 +23,25 @@ http.createServer(async (request, response) => {
   // build a structured incoming message from the raw request
   const incoming = new IncomingMessage(request);
 
-  // read the body (lazy, cached, available for any method)
-  // read it before responding: once the response has finished, Node drops the rest of the body
+  // read the request body (lazy, cached, available for any method)
   const body = await incoming.body;
 
-  // build a structured outgoing message from various content types
+  // build a structured outgoing message from any content type
   const outgoing = OutgoingMessage.from('Hello, world!');
   // or: OutgoingMessage.from(Buffer.from('...'))
   // or: new OutgoingMessage({ status: 201, headers: {...}, content: '...' })
 
-  // send the response
+  // write the response
   const { completed } = await outgoing.applyToResponse(response);
-  // completed: false means the response was not fully handed to the OS (typically the
-  // client disconnected early); it is not an error
+  // completed tells whether the response was fully handed to the OS kernel
+  // completed = false means it was not (typically because the client disconnected
+  // early); this is not an error
 }).listen(8080);
 ```
 
 ### IncomingMessage
 
-`new IncomingMessage(req)` wraps a Node.js `IncomingMessage` into:
+`new IncomingMessage(req)` wraps a Node `IncomingMessage` into:
 
 | Field     | Type                        | Description              |
 |-----------|-----------------------------|--------------------------|
@@ -51,34 +51,20 @@ http.createServer(async (request, response) => {
 | query     | Record\<string, string \| string[]\> | lazily parsed query params |
 | body      | Promise\<Buffer\>           | lazy body reader (cached) |
 
-`incoming.body` rejects instead of returning partial or empty data. The `code` on the
-rejected error is one of:
+`incoming.body` rejects when the complete data cannot be read; it never returns truncated
+or empty data. The `code` on the rejected error is one of:
 
 - `HTTPLY_BODY_ABORTED`: the request stream was truncated — the client disconnected
   mid-body, the request failed to parse, or the server called `req.destroy()`.
-- `HTTPLY_BODY_DROPPED`: the body was first read after the response had `finish`ed, and
-  Node had already dropped the rest of it.
+- `HTTPLY_BODY_DROPPED`: the body was first read after the response had `finish`ed (a
+  common usage mistake), and Node had already dropped the rest of it.
 
-`HTTPLY_BODY_DROPPED` fires at the read itself, `HTTPLY_BODY_ABORTED` fires when the
-stream terminates.
+`IncomingMessage.body` is a whole-body `Promise<Buffer>`. It does not expose streaming
+reads and does not provide timeout control for reading the request body. httply
+therefore suits consuming the request body right after it is received; it does not suit
+proxying or forwarding, and does not suit reading very large request bodies.
 
-```js
-try {
-  const body = await incoming.body;
-} catch (error) {
-  if (error.code === 'HTTPLY_BODY_DROPPED') {
-    // ordering bug: read the body before writing the response
-  }
-}
-```
-
-`IncomingMessage.body` is a whole-body `Promise<Buffer>`; streaming reads are not
-offered. So httply suits consuming the request body where it arrives, not proxying or
-forwarding: a forwarder has to await the body before it can pass it on, which costs
-performance.
-
-httply does not time out a body read. If you need one, implement it yourself or use the
-Node API.
+If you need finer-grained control over a request, use the Node API directly.
 
 ### OutgoingMessage
 
@@ -86,19 +72,20 @@ Node API.
 
 - `string`: responds with `text/plain`
 - `Buffer` / `Readable`: responds with `application/octet-stream`
-- `{ status?, headers?, content? }`: explicit control
+- `{ status?, headers?, content? }`: specify each item individually
 - `null` / `undefined`: responds with 204 No Content
 
 Use `new OutgoingMessage({ status?, headers?, content? })` for structured construction.
 
-`message.applyToResponse(response)` writes the message to a `ServerResponse` and
-resolves `{ completed: boolean }` when this write attempt is over:
+`message.applyToResponse(response)` writes the message to a `ServerResponse` and resolves
+`{ completed: boolean }` when the write operation terminates:
 
-- `completed: true`: the response was handed to the OS (the `finish` event fired). It
-  does not mean the client received it.
+- `completed: true`: the response has been committed to the OS kernel (the `finish`
+  event fired). It does not mean the client received it.
 - `completed: false`: the write ended before `finish`, typically because the connection
-  was already gone. This is not an error; the promise still resolves.
-- The promise rejects only when the content stream itself fails.
+  was already gone. This is not an error; the Promise still resolves.
+- The Promise rejects only when the content stream being written itself fails.
 
-After `finish`, httply reclaims a connection whose request body was never fully read, so
-a branch that answers without reading the body needs no `Connection: close` of its own.
+After `finish` is triggered, if the paired inbound request's body has not been fully
+read, httply reclaims its connection, so a branch that answers without reading the body
+needs no `Connection: close` of its own.

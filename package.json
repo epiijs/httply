@@ -1,7 +1,7 @@
 {
   "name": "@epiijs/httply",
   "version": "1.1.0",
-  "description": "A toolkit for handling HTTP requests and responses.",
+  "description": "A toolkit for handling server-side HTTP requests and responses.",
   "engines": {
     "node": ">=24.0.0"
   },

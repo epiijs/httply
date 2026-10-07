@@ -2,9 +2,9 @@
 
 [English](https://github.com/epiijs/httply/blob/main/README.en.md)
 
-处理 HTTP 请求与响应的工具包。
+处理服务端 HTTP 请求与响应的工具包。
 
-它把 Node 的一对收发对象整理成结构化消息，交给消费它的 handler。
+它把 Node 的一对收发对象整形成结构化消息，提供更简单易用的 API 。
 
 ## 安装
 
@@ -19,21 +19,21 @@ import http from 'node:http';
 import { IncomingMessage, OutgoingMessage } from '@epiijs/httply';
 
 http.createServer(async (request, response) => {
-  // 由原始请求构造结构化入站消息
+  // 从原始请求构造结构化入站消息
   const incoming = new IncomingMessage(request);
 
   // 读取请求体（惰性、缓存、任意 method 都可读）
-  // 要在发出响应之前读：响应 finish 之后，Node 会丢弃残余的请求体
   const body = await incoming.body;
 
-  // 由多种内容类型构造结构化出站消息
+  // 从任意内容类型构造结构化出站消息
   const outgoing = OutgoingMessage.from('Hello, world!');
   // 或：OutgoingMessage.from(Buffer.from('...'))
   // 或：new OutgoingMessage({ status: 201, headers: {...}, content: '...' })
 
-  // 写出响应
+  // 写入响应
   const { completed } = await outgoing.applyToResponse(response);
-  // completed 为 false 表示响应没有完整交入内核（通常是客户端提前断开），这不是错误
+  // completed 是是否完整提交内核的标志
+  // completed = false 表示响应尚未完整提交内核（通常是因为客户端提前断开），这不是错误
 }).listen(8080);
 ```
 
@@ -49,27 +49,15 @@ http.createServer(async (request, response) => {
 | query     | Record\<string, string \| string[]\> | 惰性解析的查询参数 |
 | body      | Promise\<Buffer\>           | 惰性读取的请求体（缓存） |
 
-`incoming.body` 读不到完整数据就 reject，不返回半份或空数据。reject 的错误的 `code` 有这些情况：
+`incoming.body` 读不到完整数据会 reject，不返回截断数据或空数据。reject 的错误的 `code` 有这些情况：
 
 - `HTTPLY_BODY_ABORTED`：请求流被截断。客户端发到一半断开、请求帧解析失败，或服务端调用了 `req.destroy()`。
-- `HTTPLY_BODY_DROPPED`：首次读取发生在响应 `finish` 之后，此时 Node 已丢弃残余请求体。
+- `HTTPLY_BODY_DROPPED`：首次读取发生在响应 `finish` 之后（这是一种常见的使用错误），此时 Node 已丢弃残余请求体。
 
-`HTTPLY_BODY_DROPPED` 在读取当场给出，`HTTPLY_BODY_ABORTED` 在流终止时给出。
+`IncomingMessage.body` 是全量 `Promise<Buffer>`，不暴露流式读取，不提供读取请求体的超时控制。
+因此，httply 更适合收到请求体后立刻消费，不适合代理转发，也不适合读取超大请求体。
 
-```js
-try {
-  const body = await incoming.body;
-} catch (error) {
-  if (error.code === 'HTTPLY_BODY_DROPPED') {
-    // 顺序错了：要在写出响应之前读 body
-  }
-}
-```
-
-`IncomingMessage.body` 是全量 `Promise<Buffer>`，没有提供流式读取。
-所以 httply 适合收到请求体后立刻消费，不适合代理转发：转发需要 await 请求体后再转发，性能有瓶颈。
-
-httply 不提供读取请求体的超时控制，如果需要超时控制，可以自己实现或使用 Node API 。
+如果需要更细致地请求控制，应直接使用 Node API 。
 
 ### OutgoingMessage
 
@@ -82,10 +70,10 @@ httply 不提供读取请求体的超时控制，如果需要超时控制，可�
 
 结构化构造用 `new OutgoingMessage({ status?, headers?, content? })`。
 
-`message.applyToResponse(response)` 把消息写入 `ServerResponse`，本次写入流程终止时 resolve `{ completed: boolean }`：
+`message.applyToResponse(response)` 把消息写入 `ServerResponse`，本次写入操作终止时 resolve `{ completed: boolean }`：
 
-- `completed: true`：响应已交入内核（`finish` 已触发），不代表客户端已收到。
+- `completed: true`：响应已提交内核（`finish` 已触发），不代表客户端已收到。
 - `completed: false`：写入在 `finish` 之前终止，通常是连接已经断了。这不是错误，Promise 照样 resolve。
-- 只有内容流自身出错才 reject。
+- 仅当写入的内容流自身出错才 reject。
 
-`finish` 之后，请求体未读完的连接会由 httply 回收，不读 body 的分支不需要自己 `Connection: close`。
+触发 `finish` 之后，如果成对的入站请求的请求体还未读完，其连接会由 httply 回收，不读 body 的分支不需要自己 `Connection: close`。
